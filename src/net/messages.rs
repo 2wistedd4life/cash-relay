@@ -287,22 +287,31 @@ pub async fn put_message(
         }
 
         // Serialze message which is stored in database
-        let mut raw_message = Vec::with_capacity(message.encoded_len());
+        let encoded_length = message.encoded_len();
+        let mut raw_message = Vec::with_capacity(encoded_length);
+        let mut ws_message = message.clone();
+
         message.encode(&mut raw_message).unwrap(); // This is safe
+
+        // TODO: Parse does not enforce there is *ACTUALLY* a payload, only that there is a
+        // payload digest. If the client is putting a message without a payload and only
+        // a payload digest, there won't be any way to recover it and it'll create downstream
+        // errors.
+        //
+        // This needs to be fixed.
+        let parsed_message = message.parse().map_err(PutMessageError::MessageParsing)?;
 
         // If serialized payload too long then remove it
         let raw_message_ws =
-            if message.payload.len() > SETTINGS.websocket.truncation_length as usize {
-                message.payload = Vec::with_capacity(0);
-                // Serialize message
-                let mut raw_message = Vec::with_capacity(message.encoded_len());
-                message.encode(&mut raw_message).unwrap(); // This is safe
-                raw_message
+            if ws_message.payload.len() > SETTINGS.websocket.truncation_length as usize {
+                ws_message.payload = Vec::with_capacity(0);
+                ws_message.payload_digest = parsed_message.payload_digest[..].to_vec();
+                let mut pruned_raw_message = Vec::with_capacity(encoded_length);
+                ws_message.encode(&mut pruned_raw_message).unwrap(); // This is safe
+                pruned_raw_message
             } else {
                 raw_message.clone()
             };
-
-        let parsed_message = message.parse().map_err(PutMessageError::MessageParsing)?;
 
         let is_self_send = destination_pubkey_hash != source_pubkey_hash;
 
@@ -326,6 +335,7 @@ pub async fn put_message(
                     bitcoin_client_inner.send_tx(&stamp_tx).await
                 }
             });
+
         future::try_join_all(broadcast)
             .await
             .map_err(PutMessageError::StampBroadcast)?;
@@ -349,6 +359,7 @@ pub async fn put_message(
         // Send to source
         if is_self_send {
             if let Some(sender) = msg_bus.get(&source_pubkey_hash.to_vec()) {
+                // TODO: Why is this moving an immutable variable?
                 if let Err(err) = sender.send(raw_message_ws.clone()) {
                     warn!(message = "failed to broadcast to self", error = ?err);
                     // TODO: Make prettier
