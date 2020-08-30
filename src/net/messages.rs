@@ -304,10 +304,10 @@ pub async fn put_message(
 
         let parsed_message = message.parse().map_err(PutMessageError::MessageParsing)?;
 
-        let is_self_send = destination_pubkey_hash != source_pubkey_hash;
+        let is_self_send = destination_pubkey_hash == source_pubkey_hash;
 
         // If sender is not self then check stamp
-        if is_self_send {
+        if !is_self_send {
             parsed_message
                 .verify_stamp()
                 .map_err(PutMessageError::StampVerify)?;
