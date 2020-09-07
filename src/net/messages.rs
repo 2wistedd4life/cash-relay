@@ -289,8 +289,6 @@ pub async fn put_message(
         // Serialze message which is stored in database
         let encoded_length = message.encoded_len();
         let mut raw_message = Vec::with_capacity(encoded_length);
-        let mut ws_message = message.clone();
-
         message.encode(&mut raw_message).unwrap(); // This is safe
 
         // TODO: Parse does not enforce there is *ACTUALLY* a payload, only that there is a
@@ -300,18 +298,6 @@ pub async fn put_message(
         //
         // This needs to be fixed.
         let parsed_message = message.parse().map_err(PutMessageError::MessageParsing)?;
-
-        // If serialized payload too long then remove it
-        let raw_message_ws =
-            if ws_message.payload.len() > SETTINGS.websocket.truncation_length as usize {
-                ws_message.payload = Vec::with_capacity(0);
-                ws_message.payload_digest = parsed_message.payload_digest[..].to_vec();
-                let mut pruned_raw_message = Vec::with_capacity(encoded_length);
-                ws_message.encode(&mut pruned_raw_message).unwrap(); // This is safe
-                pruned_raw_message
-            } else {
-                raw_message.clone()
-            };
 
         let is_self_send = destination_pubkey_hash != source_pubkey_hash;
 
@@ -326,14 +312,10 @@ pub async fn put_message(
         let broadcast = parsed_message
             .stamp
             .stamp_outpoints
-            .into_iter()
-            .map(move |stamp_oupoint| stamp_oupoint.stamp_tx)
-            .map(|stamp_tx| {
+            .iter()
+            .map(|stamp_oupoint| {
                 let bitcoin_client_inner = bitcoin_client.clone();
-                async move {
-                    let stamp_tx = stamp_tx;
-                    bitcoin_client_inner.send_tx(&stamp_tx).await
-                }
+                async move { bitcoin_client_inner.send_tx(&stamp_oupoint.stamp_tx).await }
             });
 
         future::try_join_all(broadcast)
@@ -355,6 +337,18 @@ pub async fn put_message(
             &raw_message[..],
             &parsed_message.payload_digest[..],
         )?;
+
+        // If serialized payload too long then remove it
+        let raw_message_ws =
+            if parsed_message.payload.len() > SETTINGS.websocket.truncation_length as usize {
+                let mut pruned_message = parsed_message.into_message();
+                pruned_message.payload = Vec::with_capacity(0);
+                let mut pruned_raw_message = Vec::with_capacity(encoded_length);
+                pruned_message.encode(&mut pruned_raw_message).unwrap(); // This is safe
+                pruned_raw_message
+            } else {
+                raw_message
+            };
 
         // Send to source
         if is_self_send {
