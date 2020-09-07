@@ -353,7 +353,6 @@ pub async fn put_message(
         // Send to source
         if is_self_send {
             if let Some(sender) = msg_bus.get(&source_pubkey_hash.to_vec()) {
-                // TODO: Why is this moving an immutable variable?
                 if let Err(err) = sender.send(raw_message_ws.clone()) {
                     warn!(message = "failed to broadcast to self", error = ?err);
                     // TODO: Make prettier
