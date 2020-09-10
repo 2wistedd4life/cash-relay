@@ -30,10 +30,10 @@ pub fn upgrade_ws(addr: Address, ws: Ws, msg_bus: MessageBus) -> impl Reply {
 
 #[derive(Debug, Error)]
 enum WsError {
-    #[error("websocket send failed")]
-    SinkError(#[from] warp::Error),
-    #[error("broadcast failure")]
-    BusError(#[from] broadcast::RecvError),
+    #[error("websocket send failed: {0}")]
+    SinkError(warp::Error),
+    #[error("broadcast failure: {0}")]
+    BusError(broadcast::RecvError),
 }
 
 pub async fn connect_ws(pubkey_hash: Vec<u8>, ws: WebSocket, msg_bus: MessageBus) {
