@@ -93,15 +93,16 @@ fn construct_prefixes(
     addr_payload: &[u8],
     query: Query,
     database: &Database,
+    namespace: u8,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>), GetMessageError> {
     // Get start prefix
     let start_prefix = match (query.start_time, query.start_digest) {
-        (Some(start_time), None) => db::msg_prefix(addr_payload, start_time),
+        (Some(start_time), None) => db::msg_prefix(addr_payload, start_time, namespace),
         (None, Some(start_digest_hex)) => {
             let start_digest =
                 hex::decode(start_digest_hex).map_err(GetMessageError::StartDigestMalformed)?;
             database
-                .get_msg_key_by_digest(addr_payload, &start_digest)?
+                .get_msg_key_by_digest(addr_payload, &start_digest, namespace)?
                 .ok_or(GetMessageError::StartDigestNotFound)?
         }
         (Some(_), Some(_)) => return Err(GetMessageError::StartBothGiven),
@@ -110,12 +111,12 @@ fn construct_prefixes(
 
     // Get end prefix
     let end_prefix = match (query.end_time, query.end_digest) {
-        (Some(end_time), None) => Some(db::msg_prefix(addr_payload, end_time)),
+        (Some(end_time), None) => Some(db::msg_prefix(addr_payload, end_time, namespace)),
         (None, Some(end_digest_hex)) => {
             let start_digest =
                 hex::decode(end_digest_hex).map_err(GetMessageError::EndDigestMalformed)?;
             let msg_key = database
-                .get_msg_key_by_digest(addr_payload, &start_digest)?
+                .get_msg_key_by_digest(addr_payload, &start_digest, namespace)?
                 .ok_or(GetMessageError::EndDigestNotFound)?;
             Some(msg_key)
         }
@@ -130,6 +131,7 @@ pub async fn get_payloads(
     addr: Address,
     query: Query,
     database: Database,
+    namespace: u8,
 ) -> Result<Response<Body>, GetMessageError> {
     // Extract address payload
     let address_payload = addr.as_body();
@@ -138,7 +140,7 @@ pub async fn get_payloads(
     if let Some(digest) = query.digest {
         let raw_digest = hex::decode(digest).map_err(GetMessageError::DigestDecode)?;
         let raw_message = database
-            .get_message_by_digest(&address_payload, &raw_digest[..])?
+            .get_message_by_digest(&address_payload, &raw_digest[..], namespace)?
             .ok_or(GetMessageError::NotFound)?;
         let message = Message::decode(&raw_message[..]).unwrap(); // This is safe
         return Ok(Response::builder()
@@ -146,7 +148,8 @@ pub async fn get_payloads(
             .unwrap());
     }
 
-    let (start_prefix, end_prefix) = construct_prefixes(&address_payload, query, &database)?;
+    let (start_prefix, end_prefix) =
+        construct_prefixes(&address_payload, query, &database, namespace)?;
     let message_page =
         database.get_messages_range(&start_prefix, end_prefix.as_ref().map(|v| &v[..]))?;
     let payload_page = message_page.into_payload_page();
@@ -165,6 +168,7 @@ pub async fn get_messages(
     addr: Address,
     query: Query,
     database: Database,
+    namespace: u8,
 ) -> Result<Response<Body>, GetMessageError> {
     // Extract address payload
     let address_payload = addr.as_body();
@@ -173,12 +177,13 @@ pub async fn get_messages(
     if let Some(digest) = query.digest {
         let raw_digest = hex::decode(digest).map_err(GetMessageError::DigestDecode)?;
         let message = database
-            .get_message_by_digest(&address_payload, &raw_digest[..])?
+            .get_message_by_digest(&address_payload, &raw_digest[..], namespace)?
             .ok_or(GetMessageError::NotFound)?;
         return Ok(Response::builder().body(Body::from(message)).unwrap());
     }
 
-    let (start_prefix, end_prefix) = construct_prefixes(&address_payload, query, &database)?;
+    let (start_prefix, end_prefix) =
+        construct_prefixes(&address_payload, query, &database, namespace)?;
     let message_set =
         database.get_messages_range(&start_prefix, end_prefix.as_ref().map(|v| &v[..]))?;
 
@@ -196,6 +201,7 @@ pub async fn remove_messages(
     addr: Address,
     query: Query,
     database: Database,
+    namespace: u8,
 ) -> Result<Response<Body>, GetMessageError> {
     // Convert address
     let address_payload = addr.as_body();
@@ -204,12 +210,13 @@ pub async fn remove_messages(
     if let Some(digest) = query.digest {
         let raw_digest = hex::decode(digest).map_err(GetMessageError::DigestDecode)?;
         database
-            .remove_message_by_digest(&address_payload, &raw_digest[..])?
+            .remove_message_by_digest(&address_payload, &raw_digest[..], namespace)?
             .ok_or(GetMessageError::NotFound)?;
         return Ok(Response::builder().body(Body::empty()).unwrap());
     }
 
-    let (start_prefix, end_prefix) = construct_prefixes(&address_payload, query, &database)?;
+    let (start_prefix, end_prefix) =
+        construct_prefixes(&address_payload, query, &database, namespace)?;
     database.remove_messages_range(&start_prefix, end_prefix.as_ref().map(|v| &v[..]))?;
 
     // Respond
@@ -262,6 +269,7 @@ pub async fn put_message(
     database: Database,
     bitcoin_client: BitcoinClient<HttpClient>,
     msg_bus: MessageBus,
+    namespace: u8,
 ) -> Result<Response<Body>, PutMessageError> {
     // Time now
     let timestamp = get_unix_now();
@@ -328,6 +336,7 @@ pub async fn put_message(
             timestamp,
             &raw_message[..],
             &parsed_message.payload_digest[..],
+            namespace,
         )?;
 
         // Push to destination key
@@ -336,6 +345,7 @@ pub async fn put_message(
             timestamp,
             &raw_message[..],
             &parsed_message.payload_digest[..],
+            namespace,
         )?;
 
         // If serialized payload too long then remove it

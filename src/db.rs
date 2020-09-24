@@ -10,26 +10,27 @@ const DIGEST_LEN: usize = 4;
 const NAMESPACE_LEN: usize = 20 + 1;
 
 const DIGEST_NAMESPACE: u8 = b'd';
-const MESSAGE_NAMESPACE: u8 = b'm';
+pub const FEED_NAMESPACE: u8 = b'f';
+pub const MESSAGE_NAMESPACE: u8 = b'm';
 const PROFILE_NAMESPACE: u8 = b'p';
 
 #[derive(Clone)]
 pub struct Database(Arc<DB>);
 
-pub fn msg_key(pubkey_hash: &[u8], timestamp: u64, digest: &[u8]) -> Vec<u8> {
+pub fn msg_key(pubkey_hash: &[u8], timestamp: u64, digest: &[u8], namespace: u8) -> Vec<u8> {
     let raw_timestamp: [u8; 8] = timestamp.to_be_bytes();
     [
         pubkey_hash,
-        &[MESSAGE_NAMESPACE],
+        &[namespace],
         &raw_timestamp,
         &digest[..DIGEST_LEN],
     ]
     .concat()
 }
 
-pub fn msg_prefix(pubkey_hash: &[u8], timestamp: u64) -> Vec<u8> {
+pub fn msg_prefix(pubkey_hash: &[u8], timestamp: u64, namespace: u8) -> Vec<u8> {
     let raw_timestamp: [u8; 8] = timestamp.to_be_bytes();
-    [&pubkey_hash[..], &[MESSAGE_NAMESPACE], &raw_timestamp].concat()
+    [&pubkey_hash[..], &[namespace], &raw_timestamp].concat()
 }
 
 impl Database {
@@ -44,18 +45,13 @@ impl Database {
         &self,
         pubkey_hash: &[u8],
         digest: &[u8],
+        namespace: u8,
     ) -> Result<Option<Vec<u8>>, RocksError> {
         let digest_key = [pubkey_hash, &[DIGEST_NAMESPACE], &digest].concat();
 
         let opt_timestamp = self.0.get(digest_key)?;
         Ok(opt_timestamp.map(|timestamp| {
-            [
-                pubkey_hash,
-                &[MESSAGE_NAMESPACE],
-                &timestamp,
-                &digest[..DIGEST_LEN],
-            ]
-            .concat()
+            [pubkey_hash, &[namespace], &timestamp, &digest[..DIGEST_LEN]].concat()
         }))
     }
 
@@ -63,8 +59,9 @@ impl Database {
         &self,
         pubkey_hash: &[u8],
         digest: &[u8],
+        namespace: u8,
     ) -> Result<Option<()>, RocksError> {
-        match self.get_msg_key_by_digest(pubkey_hash, digest)? {
+        match self.get_msg_key_by_digest(pubkey_hash, digest, namespace)? {
             Some(some) => {
                 self.0.delete(&some)?;
                 Ok(Some(()))
@@ -79,12 +76,13 @@ impl Database {
         timestamp: u64,
         raw_message: &[u8],
         digest: &[u8],
+        namespace: u8,
     ) -> Result<(), RocksError> {
         // Create key
         let raw_timestamp: [u8; 8] = timestamp.to_be_bytes();
         let key = [
             &pubkey_hash[..],
-            &[MESSAGE_NAMESPACE],
+            &[namespace],
             &raw_timestamp,
             &digest[..DIGEST_LEN],
         ]
@@ -103,8 +101,9 @@ impl Database {
         &self,
         pubkey_hash: &[u8],
         digest: &[u8],
+        namespace: u8,
     ) -> Result<Option<Vec<u8>>, RocksError> {
-        match self.get_msg_key_by_digest(pubkey_hash, digest)? {
+        match self.get_msg_key_by_digest(pubkey_hash, digest, namespace)? {
             Some(some) => self.get_message_by_key(&some),
             None => Ok(None),
         }
@@ -248,18 +247,14 @@ mod tests {
                 timestamp,
                 &raw_message[..],
                 digest.as_ref(),
+                MESSAGE_NAMESPACE,
             )
             .unwrap();
 
         assert!(database
-            .get_msg_key_by_digest(&address_payload, digest.as_ref())
+            .get_msg_key_by_digest(&address_payload, digest.as_ref(), MESSAGE_NAMESPACE)
             .unwrap()
             .is_some());
-
-        assert!(database
-            .get_message_by_digest(&address_payload, digest.as_ref())
-            .unwrap()
-            .is_some())
     }
 
     #[test]
@@ -281,21 +276,22 @@ mod tests {
                 timestamp,
                 &raw_message[..],
                 digest.as_ref(),
+                MESSAGE_NAMESPACE,
             )
             .unwrap();
 
         assert!(database
-            .get_msg_key_by_digest(&address_payload, digest.as_ref())
+            .get_msg_key_by_digest(&address_payload, digest.as_ref(), MESSAGE_NAMESPACE)
             .unwrap()
             .is_some());
 
         assert!(database
-            .remove_message_by_digest(&address_payload, digest.as_ref())
+            .remove_message_by_digest(&address_payload, digest.as_ref(), MESSAGE_NAMESPACE)
             .unwrap()
             .is_some());
 
         assert!(database
-            .get_message_by_digest(&address_payload, digest.as_ref())
+            .get_message_by_digest(&address_payload, digest.as_ref(), MESSAGE_NAMESPACE)
             .unwrap()
             .is_none())
     }
@@ -315,21 +311,33 @@ mod tests {
 
         // Put at 100 and 105
         database
-            .push_message(&address_payload, 100, &raw_message[..], digest.as_ref())
+            .push_message(
+                &address_payload,
+                100,
+                &raw_message[..],
+                digest.as_ref(),
+                MESSAGE_NAMESPACE,
+            )
             .unwrap();
         database
-            .push_message(&address_payload, 105, &raw_message[..], digest.as_ref())
+            .push_message(
+                &address_payload,
+                105,
+                &raw_message[..],
+                digest.as_ref(),
+                MESSAGE_NAMESPACE,
+            )
             .unwrap();
 
         // Check out of range [106, inf)
-        let prefix = msg_prefix(&address_payload, 106);
+        let prefix = msg_prefix(&address_payload, 106, MESSAGE_NAMESPACE);
         assert_eq!(
             database.get_messages_range(&prefix, None).unwrap().messages,
             vec![]
         );
 
         // Check within range [100, inf)
-        let prefix = msg_prefix(&address_payload, 100);
+        let prefix = msg_prefix(&address_payload, 100, MESSAGE_NAMESPACE);
         assert_eq!(
             database
                 .get_messages_range(&prefix, None)
@@ -340,8 +348,8 @@ mod tests {
         );
 
         // Check within range [100, 101)
-        let prefix = msg_prefix(&address_payload, 100);
-        let prefix_end = msg_prefix(&address_payload, 101);
+        let prefix = msg_prefix(&address_payload, 100, MESSAGE_NAMESPACE);
+        let prefix_end = msg_prefix(&address_payload, 101, MESSAGE_NAMESPACE);
         assert_eq!(
             database
                 .get_messages_range(&prefix, Some(&prefix_end))
@@ -352,8 +360,8 @@ mod tests {
         );
 
         // Check within range [101, 105)
-        let prefix = msg_prefix(&address_payload, 101);
-        let prefix_end = msg_prefix(&address_payload, 105);
+        let prefix = msg_prefix(&address_payload, 101, MESSAGE_NAMESPACE);
+        let prefix_end = msg_prefix(&address_payload, 105, MESSAGE_NAMESPACE);
         assert_eq!(
             database
                 .get_messages_range(&prefix, Some(&prefix_end))

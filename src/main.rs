@@ -29,7 +29,7 @@ use warp::{
 use prometheus::{Encoder, TextEncoder};
 
 use cashweb::bitcoin_client::BitcoinClient;
-use db::Database;
+use db::{Database, FEED_NAMESPACE, MESSAGE_NAMESPACE};
 use net::{payments, protection};
 use settings::Settings;
 
@@ -39,6 +39,7 @@ const PROFILES_PATH: &str = "profiles";
 const WS_PATH: &str = "ws";
 const MESSAGES_PATH: &str = "messages";
 const PAYLOADS_PATH: &str = "payloads";
+const FEEDS_PATH: &str = "feeds";
 pub const PAYMENTS_PATH: &str = "payments";
 
 lazy_static! {
@@ -57,8 +58,8 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("no global subscriber has been set");
 
     info!(message = "starting", version = crate_version!());
-    // Database state
 
+    // Database state
     info!(message = "opening database", path = %SETTINGS.db_path);
     let db = Database::try_new(&SETTINGS.db_path).expect("failed to open database");
     let db_state = warp::any().map(move || db.clone());
@@ -67,6 +68,11 @@ async fn main() {
     info!("constructing message bus");
     let message_bus = Arc::new(DashMap::with_capacity(DASHMAP_CAPACITY));
     let msg_bus_state = warp::any().map(move || message_bus.clone());
+
+    // Feed broadcast state
+    info!("constructing feed bus");
+    let feed_bus = Arc::new(DashMap::with_capacity(DASHMAP_CAPACITY));
+    let feed_bus_state = warp::any().map(move || feed_bus.clone());
 
     // Wallet state
     info!(
@@ -117,7 +123,7 @@ async fn main() {
         .and(warp::query())
         .and(db_state.clone())
         .and_then(move |addr, query, db| {
-            net::get_messages(addr, query, db).map_err(warp::reject::custom)
+            net::get_messages(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
         });
     let messages_put = warp::path(MESSAGES_PATH)
         .and(addr_base)
@@ -130,7 +136,8 @@ async fn main() {
         .and(bitcoin_client_state.clone())
         .and(msg_bus_state.clone())
         .and_then(move |addr, body, db, bitcoin_client, msg_bus| {
-            net::put_message(addr, body, db, bitcoin_client, msg_bus).map_err(warp::reject::custom)
+            net::put_message(addr, body, db, bitcoin_client, msg_bus, MESSAGE_NAMESPACE)
+                .map_err(warp::reject::custom)
         });
     let messages_delete = warp::path(MESSAGES_PATH)
         .and(addr_protected.clone())
@@ -138,7 +145,39 @@ async fn main() {
         .and(warp::query())
         .and(db_state.clone())
         .and_then(move |addr, query, db| {
-            net::remove_messages(addr, query, db).map_err(warp::reject::custom)
+            net::remove_messages(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
+        });
+
+    // Feed handlers
+    let feeds_get = warp::path(FEEDS_PATH)
+        .and(addr_base)
+        .and(warp::get())
+        .and(warp::query())
+        .and(db_state.clone())
+        .and_then(move |addr, query, db| {
+            net::get_messages(addr, query, db, FEED_NAMESPACE).map_err(warp::reject::custom)
+        });
+    let feeds_put = warp::path(FEEDS_PATH)
+        .and(addr_protected.clone())
+        .and(warp::put())
+        .and(warp::body::content_length_limit(
+            SETTINGS.limits.message_size,
+        ))
+        .and(warp::body::bytes())
+        .and(db_state.clone())
+        .and(bitcoin_client_state.clone())
+        .and(msg_bus_state.clone())
+        .and_then(move |addr, body, db, bitcoin_client, msg_bus| {
+            net::put_message(addr, body, db, bitcoin_client, msg_bus, FEED_NAMESPACE)
+                .map_err(warp::reject::custom)
+        });
+    let feeds_delete = warp::path(FEEDS_PATH)
+        .and(addr_protected.clone())
+        .and(warp::delete())
+        .and(warp::query())
+        .and(db_state.clone())
+        .and_then(move |addr, query, db| {
+            net::remove_messages(addr, query, db, FEED_NAMESPACE).map_err(warp::reject::custom)
         });
 
     // Payload handlers
@@ -148,14 +187,21 @@ async fn main() {
         .and(warp::query())
         .and(db_state.clone())
         .and_then(move |addr, query, db| {
-            net::get_payloads(addr, query, db).map_err(warp::reject::custom)
+            net::get_payloads(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
         });
 
-    // Websocket handler
-    let websocket = warp::path(WS_PATH)
+    // Websocket handlers
+    let websocket_messages = warp::path(WS_PATH)
+        .and(warp::path(MESSAGES_PATH))
         .and(addr_protected.clone())
         .and(warp::ws())
         .and(msg_bus_state)
+        .map(net::upgrade_ws);
+    let websocket_feeds = warp::path(WS_PATH)
+        .and(warp::path(FEEDS_PATH))
+        .and(addr_base)
+        .and(warp::ws())
+        .and(feed_bus_state)
         .map(net::upgrade_ws);
 
     // Profile handlers
@@ -233,6 +279,9 @@ async fn main() {
             .or(messages_get)
             .or(messages_delete)
             .or(messages_put)
+            .or(feeds_get)
+            .or(feeds_delete)
+            .or(feeds_put)
             .or(payloads_get)
             .or(profile_get)
             .or(profile_put)
@@ -255,9 +304,13 @@ async fn main() {
         // Init REST API
         let rest_api = root
             .or(payments)
-            .or(websocket)
+            .or(websocket_messages)
+            .or(websocket_feeds)
             .or(messages_get)
             .or(messages_delete)
+            .or(feeds_get)
+            .or(feeds_delete)
+            .or(feeds_put)
             .or(messages_put)
             .or(payloads_get)
             .or(profile_get)
