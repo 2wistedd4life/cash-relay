@@ -263,6 +263,24 @@ async fn main() {
         ])
         .build();
 
+    // Init REST API
+    let rest_api = root
+        .or(payments)
+        .or(websocket_messages)
+        .or(websocket_feeds)
+        .or(messages_get)
+        .or(messages_delete)
+        .or(messages_put)
+        .or(feeds_get)
+        .or(feeds_delete)
+        .or(feeds_put)
+        .or(payloads_get)
+        .or(profile_get)
+        .or(profile_put)
+        .recover(net::handle_rejection)
+        .with(cors)
+        .with(warp::trace::request());
+
     // If monitoring is enabled
     #[cfg(feature = "monitoring")]
     {
@@ -272,23 +290,7 @@ async fn main() {
         let prometheus_server = warp::path("metrics").map(monitoring::export);
         let prometheus_task = warp::serve(prometheus_server).run(SETTINGS.bind_prom);
 
-        // Init REST API
-        let rest_api = root
-            .or(payments)
-            .or(websocket)
-            .or(messages_get)
-            .or(messages_delete)
-            .or(messages_put)
-            .or(feeds_get)
-            .or(feeds_delete)
-            .or(feeds_put)
-            .or(payloads_get)
-            .or(profile_get)
-            .or(profile_put)
-            .recover(net::handle_rejection)
-            .with(cors)
-            .with(warp::trace::request())
-            .with(warp::log::custom(monitoring::measure));
+        let rest_api = rest_api.with(warp::log::custom(monitoring::measure));
         let rest_api_task = warp::serve(rest_api).run(SETTINGS.bind);
 
         // Spawn servers
@@ -301,23 +303,6 @@ async fn main() {
     {
         info!(monitoring = false);
 
-        // Init REST API
-        let rest_api = root
-            .or(payments)
-            .or(websocket_messages)
-            .or(websocket_feeds)
-            .or(messages_get)
-            .or(messages_delete)
-            .or(feeds_get)
-            .or(feeds_delete)
-            .or(feeds_put)
-            .or(messages_put)
-            .or(payloads_get)
-            .or(profile_get)
-            .or(profile_put)
-            .recover(net::handle_rejection)
-            .with(cors)
-            .with(warp::trace::request());
         let rest_api_task = warp::serve(rest_api).run(SETTINGS.bind);
         tokio::spawn(rest_api_task).await.unwrap(); // Unrecoverable
     }
