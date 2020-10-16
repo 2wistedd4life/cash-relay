@@ -195,13 +195,20 @@ async fn main() {
         .and(warp::path(MESSAGES_PATH))
         .and(addr_protected.clone())
         .and(warp::ws())
-        .and(msg_bus_state)
+        .and(msg_bus_state.clone())
         .map(net::upgrade_ws);
+
     let websocket_feeds = warp::path(WS_PATH)
         .and(warp::path(FEEDS_PATH))
         .and(addr_base)
         .and(warp::ws())
         .and(feed_bus_state)
+        .map(net::upgrade_ws);
+
+    let websocket_messages_fallback = warp::path(WS_PATH)
+        .and(addr_protected.clone())
+        .and(warp::ws())
+        .and(msg_bus_state.clone())
         .map(net::upgrade_ws);
 
     // Profile handlers
@@ -268,6 +275,7 @@ async fn main() {
         .or(payments)
         .or(websocket_messages)
         .or(websocket_feeds)
+        .or(websocket_messages_fallback)
         .or(messages_get)
         .or(messages_delete)
         .or(messages_put)
