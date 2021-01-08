@@ -4,6 +4,7 @@ extern crate clap;
 pub mod db;
 pub mod models;
 pub mod net;
+pub mod peering;
 pub mod settings;
 
 #[cfg(feature = "monitoring")]
@@ -17,6 +18,7 @@ use cashweb::{
 };
 use dashmap::DashMap;
 use futures::prelude::*;
+use hyper::Uri;
 use lazy_static::lazy_static;
 use serde::Deserialize;
 use tracing::info;
@@ -32,6 +34,7 @@ use prometheus::{Encoder, TextEncoder};
 use cashweb::bitcoin_client::BitcoinClient;
 use db::{Database, FEED_NAMESPACE, MESSAGE_NAMESPACE};
 use net::{payments, protection};
+use peering::PeerHandler;
 use settings::Settings;
 
 const DASHMAP_CAPACITY: usize = 2048;
@@ -79,6 +82,17 @@ async fn main() {
     info!("constructing feed bus");
     let feed_bus = Arc::new(DashMap::with_capacity(DASHMAP_CAPACITY));
     let feed_bus_state = warp::any().map(move || feed_bus.clone());
+
+    // Fetch peers from settings
+    let peers: Vec<Uri> = SETTINGS
+        .peering
+        .peers
+        .iter()
+        .filter_map(|peer_str| peering::parse_uri_warn(peer_str))
+        .collect();
+
+    info!("constructing peer handler");
+    let peer_handler = PeerHandler::new(peers);
 
     // Wallet state
     info!(
