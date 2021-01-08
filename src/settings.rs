@@ -52,6 +52,11 @@ pub struct Websocket {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct Peering {
+    pub peers: Vec<String>
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Settings {
     pub bind: SocketAddr,
     #[cfg(feature = "monitoring")]
@@ -62,6 +67,7 @@ pub struct Settings {
     pub limits: Limits,
     pub payments: Payment,
     pub websocket: Websocket,
+    pub peering: Peering
 }
 
 impl Settings {
