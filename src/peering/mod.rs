@@ -1,3 +1,5 @@
+pub mod relay_manager;
+
 use hyper::{client::HttpConnector, Client as HyperClient, Uri};
 use tracing::warn;
 
