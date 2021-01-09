@@ -93,6 +93,7 @@ async fn main() {
 
     info!("constructing peer handler");
     let peer_handler = PeerHandler::new(peers);
+    let peer_handler_state = warp::any().map(move || peer_handler.clone());
 
     // Wallet state
     info!(
@@ -150,10 +151,13 @@ async fn main() {
     let messages_get = warp::path(MESSAGES_PATH)
         .and(addr_protected.clone())
         .and(warp::get())
+        .and(warp::header::headers_cloned())
         .and(warp::query())
         .and(db_state.clone())
-        .and_then(move |addr, query, db| {
-            net::get_messages(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, headers, query, db, peer_handler| {
+            net::get_messages(addr, headers, query, db, MESSAGE_NAMESPACE, peer_handler)
+                .map_err(warp::reject::custom)
         });
     let messages_put = warp::path(MESSAGES_PATH)
         .and(addr_base)
@@ -165,27 +169,43 @@ async fn main() {
         .and(db_state.clone())
         .and(bitcoin_client_state.clone())
         .and(msg_bus_state.clone())
-        .and_then(move |addr, body, db, bitcoin_client, msg_bus| {
-            net::put_message(addr, body, db, bitcoin_client, msg_bus, MESSAGE_NAMESPACE)
+        .and(peer_handler_state.clone())
+        .and_then(
+            move |addr, body, db, bitcoin_client, msg_bus, peer_handler| {
+                net::put_message(
+                    addr,
+                    body,
+                    db,
+                    bitcoin_client,
+                    msg_bus,
+                    MESSAGE_NAMESPACE,
+                    peer_handler,
+                )
                 .map_err(warp::reject::custom)
-        });
+            },
+        );
     let messages_delete = warp::path(MESSAGES_PATH)
         .and(addr_protected.clone())
         .and(warp::delete())
         .and(warp::query())
         .and(db_state.clone())
-        .and_then(move |addr, query, db| {
-            net::remove_messages(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, query, db, peer_handler| {
+            net::remove_messages(addr, query, db, MESSAGE_NAMESPACE, peer_handler)
+                .map_err(warp::reject::custom)
         });
 
     // Feed handlers
     let feeds_get = warp::path(FEEDS_PATH)
         .and(addr_base)
         .and(warp::get())
+        .and(warp::header::headers_cloned())
         .and(warp::query())
         .and(db_state.clone())
-        .and_then(move |addr, query, db| {
-            net::get_messages(addr, query, db, FEED_NAMESPACE).map_err(warp::reject::custom)
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, headers, query, db, peer_handler| {
+            net::get_messages(addr, headers, query, db, FEED_NAMESPACE, peer_handler)
+                .map_err(warp::reject::custom)
         });
     let feeds_put = warp::path(FEEDS_PATH)
         .and(addr_protected.clone())
@@ -197,27 +217,43 @@ async fn main() {
         .and(db_state.clone())
         .and(bitcoin_client_state.clone())
         .and(msg_bus_state.clone())
-        .and_then(move |addr, body, db, bitcoin_client, msg_bus| {
-            net::put_message(addr, body, db, bitcoin_client, msg_bus, FEED_NAMESPACE)
+        .and(peer_handler_state.clone())
+        .and_then(
+            move |addr, body, db, bitcoin_client, msg_bus, peer_handler| {
+                net::put_message(
+                    addr,
+                    body,
+                    db,
+                    bitcoin_client,
+                    msg_bus,
+                    FEED_NAMESPACE,
+                    peer_handler,
+                )
                 .map_err(warp::reject::custom)
-        });
+            },
+        );
     let feeds_delete = warp::path(FEEDS_PATH)
         .and(addr_protected.clone())
         .and(warp::delete())
         .and(warp::query())
         .and(db_state.clone())
-        .and_then(move |addr, query, db| {
-            net::remove_messages(addr, query, db, FEED_NAMESPACE).map_err(warp::reject::custom)
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, query, db, peer_handler| {
+            net::remove_messages(addr, query, db, FEED_NAMESPACE, peer_handler)
+                .map_err(warp::reject::custom)
         });
 
     // Payload handlers
     let payloads_get = warp::path(PAYLOADS_PATH)
         .and(addr_protected.clone())
         .and(warp::get())
+        .and(warp::header::headers_cloned())
         .and(warp::query())
         .and(db_state.clone())
-        .and_then(move |addr, query, db| {
-            net::get_payloads(addr, query, db, MESSAGE_NAMESPACE).map_err(warp::reject::custom)
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, headers, query, db, peer_handler| {
+            net::get_payloads(addr, headers, query, db, MESSAGE_NAMESPACE, peer_handler)
+                .map_err(warp::reject::custom)
         });
 
     // Websocket handlers
@@ -245,18 +281,24 @@ async fn main() {
     let profile_get = warp::path(PROFILES_PATH)
         .and(addr_base)
         .and(warp::get())
+        .and(warp::header::headers_cloned())
         .and(db_state.clone())
-        .and_then(move |addr, db| net::get_profile(addr, db).map_err(warp::reject::custom));
+        .and(peer_handler_state.clone())
+        .and_then(move |addr, headers, db, peer_handler| {
+            net::get_profile(addr, headers, db, peer_handler).map_err(warp::reject::custom)
+        });
     let profile_put = warp::path(PROFILES_PATH)
         .and(addr_protected)
         .and(warp::put())
+        .and(warp::header::headers_cloned())
         .and(warp::body::content_length_limit(
             SETTINGS.limits.profile_size,
         ))
         .and(warp::body::bytes())
         .and(db_state)
-        .and_then(move |addr, body, db| {
-            net::put_profile(addr, body, db).map_err(warp::reject::custom)
+        .and(peer_handler_state)
+        .and_then(move |addr, headers, body, db, peer_handler| {
+            net::put_profile(addr, headers, body, db, peer_handler).map_err(warp::reject::custom)
         });
 
     // Payment handler

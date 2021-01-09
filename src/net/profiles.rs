@@ -1,6 +1,7 @@
 use bitcoincash_addr::Address;
 use bytes::Bytes;
 use cashweb::auth_wrapper::{ParseError, VerifyError};
+use http::HeaderMap;
 use prost::Message as _;
 use rocksdb::Error as RocksError;
 use thiserror::Error;
@@ -8,7 +9,7 @@ use tokio::task;
 use warp::{http::Response, hyper::Body, reject::Reject};
 
 use super::IntoResponse;
-use crate::{db::Database, models::wrapper::AuthWrapper};
+use crate::{db::Database, models::wrapper::AuthWrapper, peering::PeerHandler};
 
 #[derive(Debug, Error)]
 pub enum GetProfileError {
@@ -54,7 +55,9 @@ impl IntoResponse for PutProfileError {
 
 pub async fn get_profile(
     addr: Address,
+    headers: HeaderMap,
     database: Database,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, GetProfileError> {
     // Get profile
     let raw_profile = task::spawn_blocking(move || database.get_raw_profile(addr.as_body()))
@@ -68,8 +71,10 @@ pub async fn get_profile(
 
 pub async fn put_profile(
     addr: Address,
+    headers: HeaderMap,
     profile_raw: Bytes,
     database: Database,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, PutProfileError> {
     // Decode profile
     let profile =

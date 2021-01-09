@@ -11,6 +11,7 @@ use cashweb::{
 };
 use futures::future;
 use hex::FromHexError;
+use http::HeaderMap;
 use prost::Message as _;
 use ring::digest::{digest, SHA256};
 use ripemd160::{Digest, Ripemd160};
@@ -23,6 +24,7 @@ use warp::{http::Response, hyper::Body, reject::Reject};
 use super::{ws::MessageBus, IntoResponse};
 use crate::{
     db::{self, Database},
+    peering::PeerHandler,
     SETTINGS,
 };
 
@@ -129,9 +131,11 @@ fn construct_prefixes(
 
 pub async fn get_payloads(
     addr: Address,
+    headers: HeaderMap,
     query: Query,
     database: Database,
     namespace: u8,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, GetMessageError> {
     // Extract address payload
     let address_payload = addr.as_body();
@@ -166,9 +170,11 @@ pub async fn get_payloads(
 
 pub async fn get_messages(
     addr: Address,
+    headers: HeaderMap,
     query: Query,
     database: Database,
     namespace: u8,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, GetMessageError> {
     // Extract address payload
     let address_payload = addr.as_body();
@@ -202,6 +208,7 @@ pub async fn remove_messages(
     query: Query,
     database: Database,
     namespace: u8,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, GetMessageError> {
     // Convert address
     let address_payload = addr.as_body();
@@ -270,6 +277,7 @@ pub async fn put_message(
     bitcoin_client: BitcoinClient<HttpClient>,
     msg_bus: MessageBus,
     namespace: u8,
+    peer_handler: PeerHandler,
 ) -> Result<Response<Body>, PutMessageError> {
     // Time now
     let timestamp = get_unix_now();
